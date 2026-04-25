@@ -2,10 +2,8 @@
 
 import dynamic from "next/dynamic";
 
-const Map = dynamic(() => import("@/components/Map"), {
-  ssr: false,
-});
+const AppShell = dynamic(() => import("@/components/AppShell"), { ssr: false });
 
 export default function Home() {
-  return <Map />;
+  return <AppShell />;
 }
