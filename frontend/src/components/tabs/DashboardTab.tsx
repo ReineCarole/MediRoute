@@ -22,8 +22,7 @@ import {
   Cell,
   Legend,
 } from "recharts";
-
-const API = "http://localhost:8000";
+import { apiFetch } from "../auth/Api";
 
 const DELIVERY_HISTORY = [
   { month: "Nov", deliveries: 18 },
@@ -51,15 +50,19 @@ export default function DashboardTab() {
 
   useEffect(() => {
     Promise.all([
-      fetch(`${API}/inventory`).then((r) => r.json()),
-      fetch(`${API}/nodes`).then((r) => r.json()),
-      fetch(`${API}/roads/blocked`).then((r) => r.json()),
-    ]).then(([inv, nodes, blocked]) => {
-      setInventory(inv.inventory["Dépôt Central Akwa"] ?? {});
-      setNodeCount(nodes.nodes.filter((n: any) => n.type !== "depot").length);
-      setBlockedCount(blocked.blocked.length);
-      setLoading(false);
-    });
+      apiFetch("/inventory").then((r) => r.json()),
+      apiFetch("/nodes").then((r) => r.json()),
+      apiFetch("/roads/blocked").then((r) => r.json()),
+    ])
+      .then(([inv, nodes, blocked]) => {
+        setInventory(inv?.inventory?.["Dépôt Central Akwa"] ?? {});
+        setNodeCount(
+          (nodes?.nodes ?? []).filter((n: any) => n.type !== "depot").length,
+        );
+        setBlockedCount((blocked?.blocked ?? []).length);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, []);
 
   const totalStock = Object.values(inventory).reduce((a, b) => a + b, 0);
@@ -131,7 +134,7 @@ export default function DashboardTab() {
         <div className="text-right">
           <p className="text-teal-300 text-xs">Today</p>
           <p className="text-white font-semibold text-sm">
-            {new Date().toLocaleDateString("fr-CM", {
+            {new Date().toLocaleDateString("en-CM", {
               weekday: "long",
               day: "numeric",
               month: "long",
@@ -172,9 +175,8 @@ export default function DashboardTab() {
         ))}
       </div>
 
-      {/* Charts row */}
+      {/* Charts */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        {/* Delivery trend */}
         <div
           className="xl:col-span-2 rounded-2xl p-5"
           style={{
@@ -217,12 +219,7 @@ export default function DashboardTab() {
                 tickLine={false}
               />
               <Tooltip
-                contentStyle={{
-                  border: "none",
-                  borderRadius: 8,
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                  fontSize: 12,
-                }}
+                contentStyle={{ border: "none", borderRadius: 8, fontSize: 12 }}
               />
               <Area
                 type="monotone"
@@ -236,7 +233,6 @@ export default function DashboardTab() {
           </ResponsiveContainer>
         </div>
 
-        {/* Stock distribution */}
         <div
           className="rounded-2xl p-5"
           style={{
@@ -289,7 +285,7 @@ export default function DashboardTab() {
             </ResponsiveContainer>
           ) : (
             <div className="h-48 flex items-center justify-center text-slate-300 text-sm">
-              Loading…
+              {loading ? "Loading…" : "No stock data"}
             </div>
           )}
         </div>

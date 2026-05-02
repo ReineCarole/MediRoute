@@ -11,8 +11,8 @@ import {
   FaSync,
 } from "react-icons/fa";
 import { DispatchEntry } from "../AppShell";
-
-const API = "http://localhost:8000";
+import { apiFetch } from "../auth/Api";
+import { useAuth } from "../auth/Authcontext";
 
 interface QueuedRequest {
   index: number;
@@ -28,7 +28,7 @@ interface Props {
   onDispatch: (coords: number[][], entry: DispatchEntry) => void;
 }
 
-const SELECT_STYLE: React.CSSProperties = {
+const SS: React.CSSProperties = {
   width: "100%",
   border: "1.5px solid #e2e8f0",
   borderRadius: 12,
@@ -39,7 +39,7 @@ const SELECT_STYLE: React.CSSProperties = {
   outline: "none",
   appearance: "auto",
 };
-const INPUT_STYLE: React.CSSProperties = {
+const IS: React.CSSProperties = {
   width: "100%",
   border: "1.5px solid #e2e8f0",
   borderRadius: 12,
@@ -51,6 +51,8 @@ const INPUT_STYLE: React.CSSProperties = {
 };
 
 export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
+  const { user } = useAuth();
+
   const [inventory, setInventory] = useState<Record<string, number>>({});
   const [facilities, setFacilities] = useState<any[]>([]);
   const [facility, setFacility] = useState("");
@@ -64,57 +66,83 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
   const [deletingIdx, setDeletingIdx] = useState<number | null>(null);
   const [hiddenHistory, setHiddenHistory] = useState<Set<number>>(new Set());
 
-  // ── Load static data ───────────────────────────────────────────────────────
+  const token = user?.token;
+
   useEffect(() => {
-    fetch(`${API}/inventory`)
+    if (!token) return;
+    apiFetch("/inventory")
       .then((r) => r.json())
       .then((data) => {
-        const depot = data.inventory["Dépôt Central Akwa"] ?? {};
+        const depot = data?.inventory?.["Dépôt Central Akwa"] ?? {};
         setInventory(depot);
         const meds = Object.keys(depot);
         if (meds.length > 0) setMedicine(meds[0]);
-      });
-    fetch(`${API}/nodes`)
+      })
+      .catch(() => {});
+
+    apiFetch("/nodes")
       .then((r) => r.json())
       .then((data) => {
-        const f = data.nodes.filter((n: any) => n.type !== "depot");
+        const f = (data?.nodes ?? []).filter((n: any) => n.type !== "depot");
         setFacilities(f);
         if (f.length > 0) setFacility(f[0].name);
-      });
-  }, []);
+      })
+      .catch(() => {});
+  }, [token]);
+  // Poll inventory every 8 seconds so restocks show up automatically
+  useEffect(() => {
+    if (!token) return;
+    function loadInventory() {
+      apiFetch("/inventory")
+        .then((r) => r.json())
+        .then((data) => {
+          const depot = data?.inventory?.["Dépôt Central Akwa"] ?? {};
+          setInventory(depot);
+          setMedicine((prev) => {
+            // Keep current selection if it still exists, else pick first
+            const meds = Object.keys(depot);
+            if (prev && depot[prev] !== undefined) return prev;
+            return meds[0] ?? "";
+          });
+        })
+        .catch(() => {});
+    }
+    loadInventory();
+    const id = setInterval(loadInventory, 8000);
+    return () => clearInterval(id);
+  }, [token]);
 
-  // ── Poll queue every 2s ────────────────────────────────────────────────────
   const fetchQueue = useCallback(async () => {
+    if (!token) return;
     try {
-      const res = await fetch(`${API}/requests`);
+      const res = await apiFetch("/requests");
       const data = await res.json();
-      setRequests(data.requests ?? []);
-      setTotalUnits(data.total_units ?? 0);
+      setRequests(data?.requests ?? []);
+      setTotalUnits(data?.total_units ?? 0);
     } catch {}
-  }, []);
+  }, [token]);
 
   useEffect(() => {
+    if (!token) return;
     fetchQueue();
-    const interval = setInterval(fetchQueue, 2000);
-    return () => clearInterval(interval);
-  }, [fetchQueue]);
+    const id = setInterval(fetchQueue, 2000);
+    return () => clearInterval(id);
+  }, [fetchQueue, token]);
 
   async function refreshInventory() {
-    const data = await fetch(`${API}/inventory`).then((r) => r.json());
-    setInventory(data.inventory["Dépôt Central Akwa"] ?? {});
+    const data = await apiFetch("/inventory").then((r) => r.json());
+    setInventory(data?.inventory?.["Dépôt Central Akwa"] ?? {});
   }
 
-  // ── Queue one order (with full quantity) ───────────────────────────────────
   async function createRequest() {
     if (!facility || !medicine) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `${API}/request?facility=${encodeURIComponent(facility)}&medicine=${encodeURIComponent(medicine)}&priority=${priority}&quantity=${quantity}`,
+      const res = await apiFetch(
+        `/request?facility=${encodeURIComponent(facility)}&medicine=${encodeURIComponent(medicine)}&priority=${priority}&quantity=${quantity}`,
         { method: "POST" },
       );
       const data = await res.json();
-
       if (!res.ok) {
         setResult({
           status: "FAILED",
@@ -132,7 +160,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
     } catch {
       setResult({
         status: "FAILED",
-        reason: "Could not connect to backend",
+        reason: "Could not connect",
         time: new Date().toLocaleTimeString(),
       });
     } finally {
@@ -140,32 +168,27 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
     }
   }
 
-  // ── Dispatch next order (full quantity at once) ────────────────────────────
   async function processRequest() {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/process`);
+      const res = await apiFetch("/process");
       const data = await res.json();
       const entry: DispatchEntry = {
         ...data,
         time: new Date().toLocaleTimeString(),
       };
-
       setResult(entry);
       await refreshInventory();
       fetchQueue();
-
       if (data.status === "APPROVED") {
-        if (data.route?.coords?.length > 0) {
+        if (data.route?.coords?.length > 0)
           onDispatch(data.route.coords, entry);
-        } else {
-          onQueue(entry);
-        }
+        else onQueue(entry);
       }
     } catch {
       setResult({
         status: "FAILED",
-        reason: "Could not connect to backend",
+        reason: "Could not connect",
         time: new Date().toLocaleTimeString(),
       });
     } finally {
@@ -173,31 +196,24 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
     }
   }
 
-  // ── Cancel a queued order ──────────────────────────────────────────────────
   async function cancelRequest(index: number) {
     setDeletingIdx(index);
     try {
-      await fetch(`${API}/request/${index}`, { method: "DELETE" });
+      await apiFetch(`/request/${index}`, { method: "DELETE" });
       fetchQueue();
     } finally {
       setDeletingIdx(null);
     }
   }
 
-  // ── History helpers ────────────────────────────────────────────────────────
   const dispatchedHistory = history
     .map((h, i) => ({ ...h, originalIndex: i }))
     .filter(
       (h) => h.status === "APPROVED" && !hiddenHistory.has(h.originalIndex),
     );
 
-  function removeFromHistory(idx: number) {
-    setHiddenHistory((s) => new Set([...s, idx]));
-  }
-
   const maxQty = medicine ? (inventory[medicine] ?? 1) : 1;
-
-  const priorityColor = (p: number) =>
+  const pColor = (p: number) =>
     p <= 2 ? "#ef4444" : p === 3 ? "#f59e0b" : "#10b981";
 
   return (
@@ -206,7 +222,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
       style={{ background: "#f0f4f8" }}
     >
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* ── Request form ─────────────────────────────────────────────── */}
+        {/* Form */}
         <div
           className="xl:col-span-1 rounded-2xl overflow-hidden"
           style={{
@@ -234,7 +250,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
               <select
                 value={facility}
                 onChange={(e) => setFacility(e.target.value)}
-                style={SELECT_STYLE}
+                style={SS}
               >
                 <option value="">Select facility…</option>
                 {facilities.map((f) => (
@@ -244,7 +260,6 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                 ))}
               </select>
             </div>
-
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">
                 Medicine
@@ -255,7 +270,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                   setMedicine(e.target.value);
                   setQuantity(1);
                 }}
-                style={SELECT_STYLE}
+                style={SS}
               >
                 {Object.entries(inventory).map(([med, qty]) => (
                   <option key={med} value={med} disabled={qty === 0}>
@@ -264,7 +279,6 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                 ))}
               </select>
             </div>
-
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">
                 Quantity
@@ -280,21 +294,20 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                       Math.min(Math.max(1, Number(e.target.value)), maxQty),
                     )
                   }
-                  style={{ ...INPUT_STYLE, width: 90 }}
+                  style={{ ...IS, width: 90 }}
                 />
                 <span className="text-xs text-slate-500">
-                  Max available: <b className="text-slate-700">{maxQty}</b>
+                  Max: <b className="text-slate-700">{maxQty}</b>
                 </span>
               </div>
             </div>
-
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">
                 Priority Level
               </label>
               <div className="flex gap-2">
                 {[1, 2, 3, 4, 5].map((p) => {
-                  const col =
+                  const c =
                     p <= 2
                       ? { a: "#ef4444", bg: "#fef2f2" }
                       : p === 3
@@ -306,11 +319,11 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                       onClick={() => setPriority(p)}
                       className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
                       style={{
-                        background: priority === p ? col.bg : "#f8fafc",
-                        color: priority === p ? col.a : "#94a3b8",
+                        background: priority === p ? c.bg : "#f8fafc",
+                        color: priority === p ? c.a : "#94a3b8",
                         border:
                           priority === p
-                            ? `1.5px solid ${col.a}`
+                            ? `1.5px solid ${c.a}`
                             : "1.5px solid #e2e8f0",
                       }}
                     >
@@ -323,7 +336,6 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                 1 = highest · 5 = lowest
               </p>
             </div>
-
             <div className="flex gap-3 pt-1">
               <button
                 onClick={createRequest}
@@ -333,8 +345,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                   background: "linear-gradient(135deg, #0d3d3d, #14b8a6)",
                 }}
               >
-                <FaInbox size={13} />
-                {loading ? "Adding…" : "Queue Request"}
+                <FaInbox size={13} /> {loading ? "Adding…" : "Queue Request"}
               </button>
               <button
                 onClick={processRequest}
@@ -344,13 +355,11 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                   background: "linear-gradient(135deg, #16a34a, #22c55e)",
                 }}
               >
-                <FaBolt size={13} />
-                {loading ? "…" : "Dispatch Next"}
+                <FaBolt size={13} /> {loading ? "…" : "Dispatch Next"}
               </button>
             </div>
           </div>
 
-          {/* Result card */}
           {result && (
             <div
               className="mx-5 mb-5 rounded-xl p-3"
@@ -389,16 +398,16 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
               )}
               {result.remaining_stock !== undefined && (
                 <p className="text-xs mt-1 opacity-75">
-                  Remaining stock: <b>{result.remaining_stock}</b>
+                  Remaining: <b>{result.remaining_stock}</b>
                 </p>
               )}
             </div>
           )}
         </div>
 
-        {/* ── Right column ──────────────────────────────────────────────── */}
+        {/* Right */}
         <div className="xl:col-span-2 flex flex-col gap-6">
-          {/* Pending queue */}
+          {/* Queue */}
           <div
             className="rounded-2xl overflow-hidden"
             style={{
@@ -433,7 +442,6 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                 <FaSync size={9} /> Refresh
               </button>
             </div>
-
             <div className="divide-y divide-slate-50">
               {requests.length === 0 ? (
                 <div className="p-6 text-center text-slate-400 text-sm">
@@ -445,14 +453,12 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                     key={req.index}
                     className="px-5 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors"
                   >
-                    {/* Priority badge */}
                     <div
                       className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-xs font-bold text-white"
-                      style={{ background: priorityColor(req.priority) }}
+                      style={{ background: pColor(req.priority) }}
                     >
                       {req.priority}
                     </div>
-
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold text-slate-700 truncate">
                         {req.facility}
@@ -461,20 +467,17 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                         {req.quantity}× {req.medicine}
                       </p>
                     </div>
-
                     <span
-                      className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
+                      className="text-xs px-2 py-0.5 rounded-full font-medium"
                       style={{ background: "#eff6ff", color: "#2563eb" }}
                     >
                       Queued
                     </span>
-
                     <button
                       onClick={() => cancelRequest(req.index)}
                       disabled={deletingIdx === req.index}
-                      className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors disabled:opacity-40"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 disabled:opacity-40"
                       style={{ background: "#fef2f2", color: "#ef4444" }}
-                      title="Cancel this order"
                     >
                       {deletingIdx === req.index ? (
                         <FaSync size={10} className="animate-spin" />
@@ -488,7 +491,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
             </div>
           </div>
 
-          {/* Dispatch history — APPROVED only */}
+          {/* History */}
           <div
             className="rounded-2xl overflow-hidden"
             style={{
@@ -499,12 +502,11 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-slate-700 text-sm flex items-center gap-2">
-                  <FaRoad className="text-teal-500" />
-                  Dispatch History
+                  <FaRoad className="text-teal-500" /> Dispatch History
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
                   {dispatchedHistory.length} completed dispatch
-                  {dispatchedHistory.length !== 1 ? "es" : ""} this session
+                  {dispatchedHistory.length !== 1 ? "es" : ""}
                 </p>
               </div>
               {dispatchedHistory.length > 0 && (
@@ -519,20 +521,19 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                 </button>
               )}
             </div>
-
             <div
               className="divide-y divide-slate-50 overflow-y-auto"
               style={{ maxHeight: 320 }}
             >
               {dispatchedHistory.length === 0 ? (
                 <div className="p-6 text-center text-slate-400 text-sm">
-                  No completed dispatches yet this session.
+                  No completed dispatches yet.
                 </div>
               ) : (
                 dispatchedHistory.map((h) => (
                   <div
                     key={h.originalIndex}
-                    className="px-5 py-3 flex items-start gap-3 hover:bg-slate-50 transition-colors"
+                    className="px-5 py-3 flex items-start gap-3 hover:bg-slate-50"
                   >
                     <div
                       className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
@@ -554,7 +555,7 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                       )}
                       {h.remaining_stock !== undefined && (
                         <p className="text-xs text-slate-400 mt-0.5">
-                          Remaining stock: <b>{h.remaining_stock}</b>
+                          Remaining: <b>{h.remaining_stock}</b>
                         </p>
                       )}
                     </div>
@@ -562,10 +563,13 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
                       {h.time}
                     </span>
                     <button
-                      onClick={() => removeFromHistory(h.originalIndex)}
-                      className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
+                      onClick={() =>
+                        setHiddenHistory(
+                          (s) => new Set([...s, h.originalIndex]),
+                        )
+                      }
+                      className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
                       style={{ background: "#fef2f2", color: "#ef4444" }}
-                      title="Remove from history"
                     >
                       <FaTrash size={9} />
                     </button>

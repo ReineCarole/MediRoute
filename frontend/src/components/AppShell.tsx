@@ -12,6 +12,7 @@ import {
   FaBars,
   FaTimes,
 } from "react-icons/fa";
+import { useAuth } from "./auth/Authcontext";
 
 import DashboardTab from "./tabs/DashboardTab";
 import MapTab from "./tabs/MapTab";
@@ -22,11 +23,21 @@ import SettingsTab from "./tabs/SettingsTab";
 type Tab = "dashboard" | "map" | "inventory" | "orders" | "settings";
 
 const NAV = [
-  { id: "dashboard", label: "Dashboard", icon: FaTachometerAlt },
-  { id: "map", label: "Live Map", icon: FaMapMarkedAlt },
-  { id: "inventory", label: "Inventory", icon: FaBoxes },
-  { id: "orders", label: "Orders", icon: FaClipboardList },
-  { id: "settings", label: "Settings", icon: FaCog },
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    icon: FaTachometerAlt,
+    permission: "read",
+  },
+  { id: "map", label: "Live Map", icon: FaMapMarkedAlt, permission: "read" },
+  { id: "inventory", label: "Inventory", icon: FaBoxes, permission: "read" },
+  {
+    id: "orders",
+    label: "Orders",
+    icon: FaClipboardList,
+    permission: "dispatch",
+  },
+  { id: "settings", label: "Settings", icon: FaCog, permission: "block_roads" },
 ] as const;
 
 export interface DispatchEntry {
@@ -39,11 +50,23 @@ export interface DispatchEntry {
   time: string;
 }
 
+const ROLE_COLORS: Record<string, { bg: string; color: string }> = {
+  superadmin: { bg: "#fef3c7", color: "#d97706" },
+  admin: { bg: "#ede9fe", color: "#7c3aed" },
+  dispatcher: { bg: "#e0f2fe", color: "#0369a1" },
+  viewer: { bg: "#f0fdf4", color: "#16a34a" },
+};
+
 export default function AppShell() {
+  const { user, logout, hasPermission } = useAuth();
+
   const [active, setActive] = useState<Tab>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
   const [history, setHistory] = useState<DispatchEntry[]>([]);
   const [pendingRoute, setPendingRoute] = useState<number[][] | null>(null);
+
+  // Filter nav items by role
+  const visibleNav = NAV.filter((item) => hasPermission(item.permission));
 
   function addHistory(entry: DispatchEntry) {
     setHistory((h) => [entry, ...h.slice(0, 49)]);
@@ -55,8 +78,6 @@ export default function AppShell() {
     setActive("map");
   }
 
-  // Tab visibility helper — uses absolute positioning so ALL tabs are
-  // always rendered and have real dimensions (fixes Leaflet grey map bug)
   function tabStyle(id: Tab): React.CSSProperties {
     return {
       position: "absolute",
@@ -67,6 +88,8 @@ export default function AppShell() {
       overflow: "hidden",
     };
   }
+
+  const roleStyle = ROLE_COLORS[user?.role ?? "viewer"];
 
   return (
     <div
@@ -103,9 +126,27 @@ export default function AppShell() {
           )}
         </div>
 
+        {/* User card */}
+        {!collapsed && user && (
+          <div
+            className="mx-3 mt-3 px-3 py-2.5 rounded-xl"
+            style={{ background: "rgba(255,255,255,0.07)" }}
+          >
+            <p className="text-white text-xs font-semibold truncate">
+              {user.name}
+            </p>
+            <span
+              className="text-xs px-1.5 py-0.5 rounded font-medium mt-0.5 inline-block"
+              style={{ background: roleStyle.bg, color: roleStyle.color }}
+            >
+              {user.role}
+            </span>
+          </div>
+        )}
+
         {/* Nav */}
         <nav className="flex-1 py-4 space-y-1 px-2">
-          {NAV.map(({ id, label, icon: Icon }) => {
+          {visibleNav.map(({ id, label, icon: Icon }) => {
             const isActive = active === id;
             return (
               <button
@@ -156,10 +197,18 @@ export default function AppShell() {
               <span className="text-xs text-slate-400">Collapse</span>
             )}
           </button>
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors">
-            <FaSignOutAlt style={{ color: "#94a3b8", fontSize: 15 }} />
+          <button
+            onClick={logout}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-red-900/20 transition-colors group"
+          >
+            <FaSignOutAlt
+              style={{ color: "#94a3b8", fontSize: 15 }}
+              className="group-hover:text-red-400"
+            />
             {!collapsed && (
-              <span className="text-xs text-slate-400">Logout</span>
+              <span className="text-xs text-slate-400 group-hover:text-red-400">
+                Logout
+              </span>
             )}
           </button>
         </div>
@@ -187,22 +236,28 @@ export default function AppShell() {
           <div className="flex items-center gap-3">
             <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             <span className="text-xs text-slate-500">Backend connected</span>
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
-              style={{
-                background: "linear-gradient(135deg, #0d3d3d, #14b8a6)",
-              }}
-            >
-              A
-            </div>
+            {user && (
+              <div className="flex items-center gap-2">
+                <span
+                  className="text-xs px-2 py-1 rounded-full font-medium hidden sm:block"
+                  style={{ background: roleStyle.bg, color: roleStyle.color }}
+                >
+                  {user.role}
+                </span>
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
+                  style={{
+                    background: "linear-gradient(135deg, #0d3d3d, #14b8a6)",
+                  }}
+                >
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
+              </div>
+            )}
           </div>
         </header>
 
-        {/* 
-          Tab container — position:relative so absolute children fill it.
-          All tabs are always in the DOM (visibility:hidden when inactive)
-          so Leaflet's container always has real pixel dimensions.
-        */}
+        {/* Tabs */}
         <div className="flex-1 relative overflow-hidden">
           <div style={tabStyle("dashboard")}>
             <DashboardTab />
@@ -218,14 +273,40 @@ export default function AppShell() {
             <InventoryTab />
           </div>
           <div style={tabStyle("orders")}>
-            <OrdersTab
-              history={history}
-              onQueue={addHistory}
-              onDispatch={handleDispatchRoute}
-            />
+            {hasPermission("dispatch") ? (
+              <OrdersTab
+                history={history}
+                onQueue={addHistory}
+                onDispatch={handleDispatchRoute}
+              />
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <p className="text-slate-500 font-medium">
+                    Access restricted
+                  </p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    Your role does not have dispatch permission
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
           <div style={tabStyle("settings")}>
-            <SettingsTab />
+            {hasPermission("block_roads") ? (
+              <SettingsTab />
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <p className="text-slate-500 font-medium">
+                    Access restricted
+                  </p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    Your role does not have settings permission
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </main>

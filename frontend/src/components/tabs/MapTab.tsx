@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { FaSearch, FaTimes } from "react-icons/fa";
-
-const API = "http://localhost:8000";
+import { apiFetch } from "../auth/Api";
 
 const TYPE_COLORS: Record<string, string> = {
   depot: "#f4511e",
@@ -67,23 +66,19 @@ export default function MapTab({
   const [facilities, setFacilities] = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
 
-  // ── Init map once ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
-
-    const map = L.map(mapContainerRef.current, {
-      preferCanvas: true, // better performance
-    }).setView([4.055, 9.73], 13);
-
+    const map = L.map(mapContainerRef.current, { preferCanvas: true }).setView(
+      [4.055, 9.73],
+      13,
+    );
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap",
     }).addTo(map);
-
     mapRef.current = map;
 
     loadNodes(map).then(() => {
       nodesLoadedRef.current = true;
-      // invalidate after nodes load to fix any sizing issues
       map.invalidateSize();
       drawBlockedRoads();
       setInterval(drawBlockedRoads, 5000);
@@ -95,17 +90,15 @@ export default function MapTab({
     };
   }, []);
 
-  // ── When tab becomes visible, invalidate size so tiles render correctly ────
   useEffect(() => {
     if (!isActive || !mapRef.current) return;
-    // slight delay ensures visibility:visible has taken effect
-    const t = setTimeout(() => {
-      mapRef.current?.invalidateSize({ animate: false });
-    }, 100);
+    const t = setTimeout(
+      () => mapRef.current?.invalidateSize({ animate: false }),
+      100,
+    );
     return () => clearTimeout(t);
   }, [isActive]);
 
-  // ── Consume pending route from AppShell ────────────────────────────────────
   useEffect(() => {
     if (!pendingRoute || !isActive || !mapRef.current) return;
     const t = setTimeout(() => {
@@ -115,7 +108,6 @@ export default function MapTab({
     return () => clearTimeout(t);
   }, [pendingRoute, isActive]);
 
-  // ── Search filter ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!search) {
       setFiltered([]);
@@ -128,38 +120,42 @@ export default function MapTab({
     );
   }, [search, facilities]);
 
-  // ── Load nodes ─────────────────────────────────────────────────────────────
   async function loadNodes(map: L.Map) {
-    const res = await fetch(`${API}/nodes`);
-    const data = await res.json();
-    setFacilities(data.nodes.filter((n: any) => n.type !== "depot"));
+    try {
+      const res = await apiFetch("/nodes");
+      const data = await res.json();
+      const nodes = data?.nodes ?? [];
+      setFacilities(nodes.filter((n: any) => n.type !== "depot"));
 
-    data.nodes.forEach(({ name, coords, type, arrondissement }: any) => {
-      coordsRef.current[name] = coords;
-      const color = TYPE_COLORS[type] ?? "#888";
-      const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
-      const isDepot = type === "depot";
+      nodes.forEach(({ name, coords, type, arrondissement }: any) => {
+        coordsRef.current[name] = coords;
+        const color = TYPE_COLORS[type] ?? "#888";
+        const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
+        const isDepot = type === "depot";
 
-      L.marker(coords, { icon: makeFaIcon(type, color) })
-        .addTo(map)
-        .bindPopup(
-          `
-          <div style="font-family:sans-serif;min-width:160px;">
-            <b style="font-size:13px;color:#1e293b;">${name}</b><br/>
-            <span style="color:${color};font-size:11px;font-weight:600;">${typeLabel}</span>
-            <span style="font-size:11px;color:#94a3b8;"> · ${arrondissement}</span>
-            ${
-              !isDepot
-                ? `<br/><span style="font-size:11px;color:#14b8a6;cursor:pointer;font-weight:500;"
-                   onclick="window.__routeTo('${name.replace(/'/g, "\\'")}')">→ Route here</span>`
-                : ""
-            }
-          </div>`,
-        )
-        .on("click", () => {
-          if (!isDepot) flyAndRoute(name, coords);
-        });
-    });
+        L.marker(coords, { icon: makeFaIcon(type, color) })
+          .addTo(map)
+          .bindPopup(
+            `
+            <div style="font-family:sans-serif;min-width:160px;">
+              <b style="font-size:13px;color:#1e293b;">${name}</b><br/>
+              <span style="color:${color};font-size:11px;font-weight:600;">${typeLabel}</span>
+              <span style="font-size:11px;color:#94a3b8;"> · ${arrondissement}</span>
+              ${
+                !isDepot
+                  ? `<br/><span style="font-size:11px;color:#14b8a6;cursor:pointer;font-weight:500;"
+                onclick="window.__routeTo('${name.replace(/'/g, "\\'")}')">→ Route here</span>`
+                  : ""
+              }
+            </div>`,
+          )
+          .on("click", () => {
+            if (!isDepot) flyAndRoute(name, coords);
+          });
+      });
+    } catch (err) {
+      console.error("loadNodes error:", err);
+    }
   }
 
   function flyAndRoute(name: string, coords: [number, number]) {
@@ -171,9 +167,7 @@ export default function MapTab({
     if (!mapRef.current) return;
     setStatus("Routing…");
     try {
-      const res = await fetch(
-        `${API}/route/${encodeURIComponent(destination)}`,
-      );
+      const res = await apiFetch(`/route/${encodeURIComponent(destination)}`);
       const data = await res.json();
       if (data.error) {
         setStatus("No route found");
@@ -188,12 +182,10 @@ export default function MapTab({
   function drawRouteOnMap(coords: number[][]) {
     const map = mapRef.current;
     if (!map || !coords?.length) return;
-
     if (routeLineRef.current) {
       map.removeLayer(routeLineRef.current);
       routeLineRef.current = null;
     }
-
     const line = L.polyline(coords as L.LatLngExpression[], {
       color: "#14b8a6",
       weight: 5,
@@ -201,7 +193,6 @@ export default function MapTab({
     }).addTo(map);
     routeLineRef.current = line;
     map.fitBounds(line.getBounds(), { padding: [60, 60] });
-
     animateDelivery(coords);
   }
 
@@ -209,11 +200,11 @@ export default function MapTab({
     const map = mapRef.current;
     if (!map || !nodesLoadedRef.current) return;
     try {
-      const res = await fetch(`${API}/roads/blocked`);
+      const res = await apiFetch("/roads/blocked");
       const data = await res.json();
       blockedLinesRef.current.forEach((l) => map.removeLayer(l));
       blockedLinesRef.current = [];
-      data.blocked.forEach(([from, to]: string[]) => {
+      (data?.blocked ?? []).forEach(([from, to]: string[]) => {
         const f = coordsRef.current[from];
         const t = coordsRef.current[to];
         if (!f || !t) return;
@@ -242,16 +233,13 @@ export default function MapTab({
   function animateDelivery(path: number[][]) {
     const map = mapRef.current;
     if (!map || !path?.length) return;
-
     let smooth: number[][] = [];
     for (let i = 0; i < path.length - 1; i++)
       smooth = smooth.concat(interpolate(path[i], path[i + 1]));
-
     if (vehicleRef.current) {
       map.removeLayer(vehicleRef.current);
       vehicleRef.current = null;
     }
-
     const marker = L.marker(smooth[0] as L.LatLngExpression, {
       icon: truckIcon,
     })
@@ -260,16 +248,13 @@ export default function MapTab({
       .openPopup();
     vehicleRef.current = marker;
     setStatus("Delivering…");
-
     let i = 0;
     function move() {
       if (!vehicleRef.current) return;
       if (i < smooth.length) {
         marker.setLatLng(smooth[i++] as L.LatLngExpression);
         setTimeout(move, 80);
-      } else {
-        setStatus("Delivered ✅");
-      }
+      } else setStatus("Delivered ✅");
     }
     move();
   }
@@ -299,7 +284,6 @@ export default function MapTab({
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {/* Map container — explicit pixel fill */}
       <div ref={mapContainerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* Search */}
@@ -350,7 +334,7 @@ export default function MapTab({
         )}
       </div>
 
-      {/* Status pill */}
+      {/* Status */}
       <div className="absolute top-4 right-4 z-[1000]">
         <div
           className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium shadow-lg"

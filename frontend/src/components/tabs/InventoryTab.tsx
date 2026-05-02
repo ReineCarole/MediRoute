@@ -1,12 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FaBoxes, FaPlus, FaMinus, FaSync } from "react-icons/fa";
+import {
+  FaBoxes,
+  FaSync,
+  FaPlus,
+  FaTimes,
+  FaCheckCircle,
+  FaExclamationTriangle,
+  FaPen,
+} from "react-icons/fa";
 import { MdLocalPharmacy } from "react-icons/md";
-
-const API = "http://localhost:8000";
+import { apiFetch, apiPost } from "../auth/Api";
+import { useAuth } from "../auth/Authcontext";
 
 const STOCK_THRESHOLDS = { critical: 5, low: 15 };
+const NEW_MEDICINE_KEY = "__new__";
 
 function stockStatus(qty: number) {
   if (qty <= STOCK_THRESHOLDS.critical)
@@ -17,20 +26,93 @@ function stockStatus(qty: number) {
 }
 
 export default function InventoryTab() {
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission("manage_inventory");
+
   const [inventory, setInventory] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
-  async function fetchInventory() {
-    setLoading(true);
-    const res = await fetch(`${API}/inventory`);
-    const data = await res.json();
-    setInventory(data.inventory["Dépôt Central Akwa"] ?? {});
-    setLoading(false);
+  // Modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selMedicine, setSelMedicine] = useState(""); // dropdown value
+  const [customName, setCustomName] = useState(""); // typed when NEW_MEDICINE_KEY selected
+  const [quantity, setQuantity] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    text: string;
+    ok: boolean;
+  } | null>(null);
+
+  async function fetchInventory(silent = false) {
+    if (!silent) setLoading(true); // ← only show spinner on manual refresh
+    try {
+      const res = await apiFetch("/inventory");
+      const data = await res.json();
+      const depot = data?.inventory?.["Dépôt Central Akwa"] ?? {};
+      setInventory(depot);
+      const meds = Object.keys(depot);
+      if (meds.length > 0 && !selMedicine) setSelMedicine(meds[0]);
+    } catch {}
+    if (!silent) setLoading(false);
   }
 
   useEffect(() => {
     fetchInventory();
-  }, []);
+    const id = setInterval(() => {
+      if (!modalOpen) fetchInventory(true);
+    }, 8000);
+    return () => clearInterval(id);
+  }, [modalOpen]); // ← re-register when modalOpen changes
+
+  function openModal(preselect?: string) {
+    setSelMedicine(preselect ?? Object.keys(inventory)[0] ?? "");
+    setCustomName("");
+    setQuantity(1);
+    setFeedback(null);
+    setModalOpen(true);
+  }
+
+  // Derived values
+  const isNew = selMedicine === NEW_MEDICINE_KEY;
+  const medicine = isNew ? customName.trim() : selMedicine;
+  const medicines = Object.keys(inventory);
+  const currentQty = !isNew ? (inventory[medicine] ?? 0) : null;
+
+  async function handleRestock() {
+    if (!medicine) {
+      setFeedback({ text: "Please enter a medicine name", ok: false });
+      return;
+    }
+    if (quantity < 1) {
+      setFeedback({ text: "Quantity must be at least 1", ok: false });
+      return;
+    }
+
+    setSubmitting(true);
+    setFeedback(null);
+    try {
+      const res = await apiPost("/inventory/restock", {
+        medicine,
+        quantity,
+        is_new: isNew,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setFeedback({ text: data.detail ?? "Failed", ok: false });
+      } else {
+        setFeedback({ text: data.message, ok: true });
+        await fetchInventory();
+        setTimeout(() => {
+          setModalOpen(false);
+          setFeedback(null);
+        }, 1800);
+      }
+    } catch {
+      setFeedback({ text: "Could not connect to backend", ok: false });
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   const totalStock = Object.values(inventory).reduce((a, b) => a + b, 0);
   const criticalItems = Object.values(inventory).filter(
@@ -55,14 +137,27 @@ export default function InventoryTab() {
             Medical supply inventory
           </p>
         </div>
-        <button
-          onClick={fetchInventory}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors"
-          style={{ background: "#e6fffa", color: "#0f766e" }}
-        >
-          <FaSync size={10} className={loading ? "animate-spin" : ""} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button
+              onClick={() => openModal()}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold text-white"
+              style={{
+                background: "linear-gradient(135deg, #0d3d3d, #14b8a6)",
+              }}
+            >
+              <FaPlus size={10} /> Restock / Add Medicine
+            </button>
+          )}
+          <button
+            onClick={fetchInventory}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
+            style={{ background: "#e6fffa", color: "#0f766e" }}
+          >
+            <FaSync size={10} className={loading ? "animate-spin" : ""} />{" "}
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -110,9 +205,18 @@ export default function InventoryTab() {
           boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
         }}
       >
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-          <FaBoxes className="text-teal-500" />
-          <h3 className="font-semibold text-slate-700 text-sm">Stock Levels</h3>
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FaBoxes className="text-teal-500" />
+            <h3 className="font-semibold text-slate-700 text-sm">
+              Stock Levels
+            </h3>
+          </div>
+          {!canManage && (
+            <span className="text-xs text-slate-400 italic">
+              View only — admin required to restock
+            </span>
+          )}
         </div>
 
         {loading ? (
@@ -135,17 +239,17 @@ export default function InventoryTab() {
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500">
                   Stock bar
                 </th>
+                {canManage && <th className="px-5 py-3"></th>}
               </tr>
             </thead>
             <tbody>
-              {Object.entries(inventory).map(([med, qty], i) => {
+              {Object.entries(inventory).map(([med, qty]) => {
                 const { label, color, bg } = stockStatus(qty);
                 const pct = Math.min((qty / 60) * 100, 100);
                 return (
                   <tr
                     key={med}
                     className="border-t border-slate-50 hover:bg-slate-50 transition-colors"
-                    style={{ animationDelay: `${i * 50}ms` }}
                   >
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
@@ -180,6 +284,18 @@ export default function InventoryTab() {
                         />
                       </div>
                     </td>
+                    {canManage && (
+                      <td className="px-5 py-3">
+                        <button
+                          onClick={() => openModal(med)}
+                          className="text-xs px-2 py-1 rounded-lg font-medium"
+                          style={{ background: "#e6fffa", color: "#0f766e" }}
+                        >
+                          <FaPlus size={9} className="inline mr-1" />
+                          Restock
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -188,9 +304,226 @@ export default function InventoryTab() {
         )}
       </div>
 
-      <p className="text-xs text-slate-400 mt-3 text-center">
-        Stock replenishment and manual adjustments coming in next update.
-      </p>
+      {/* ── Modal ──────────────────────────────────────────────────────────── */}
+      {modalOpen && (
+        <div
+          className="fixed inset-0 z-[2000] flex items-center justify-center p-4"
+          style={{
+            background: "rgba(0,0,0,0.45)",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl overflow-hidden"
+            style={{
+              background: "white",
+              boxShadow: "0 25px 60px rgba(0,0,0,0.2)",
+            }}
+          >
+            {/* Header */}
+            <div
+              className="px-6 py-4 flex items-center justify-between"
+              style={{
+                background: "linear-gradient(135deg, #0d3d3d, #0f766e)",
+              }}
+            >
+              <div>
+                <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                  <FaPlus size={12} />
+                  {isNew ? "Add New Medicine" : "Restock Medicine"}
+                </h3>
+                <p className="text-teal-200 text-xs mt-0.5">
+                  {isNew
+                    ? "Add a new medicine type to the depot"
+                    : "Increase stock of an existing medicine"}
+                </p>
+              </div>
+              <button
+                onClick={() => setModalOpen(false)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/20"
+              >
+                <FaTimes className="text-white" size={13} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Smart dropdown */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">
+                  Medicine
+                </label>
+                <select
+                  value={selMedicine}
+                  onChange={(e) => {
+                    setSelMedicine(e.target.value);
+                    setCustomName("");
+                    setFeedback(null);
+                  }}
+                  className="w-full border border-slate-200 rounded-xl p-3 text-sm outline-none"
+                  style={{
+                    color: "#1e293b",
+                    background: "#f8fafc",
+                    appearance: "auto",
+                  }}
+                >
+                  <option value="" disabled>
+                    Select medicine…
+                  </option>
+                  {medicines.map((m) => (
+                    <option key={m} value={m}>
+                      {m} — {inventory[m]} units in stock
+                    </option>
+                  ))}
+                  {/* Divider */}
+                  <option disabled>──────────────</option>
+                  <option value={NEW_MEDICINE_KEY}>
+                    ✏️ Add a new medicine type…
+                  </option>
+                </select>
+              </div>
+
+              {/* Custom name input — only shown when "Add new" is selected */}
+              {isNew && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">
+                    New Medicine Name
+                  </label>
+                  <div className="relative">
+                    <FaPen
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300"
+                      size={12}
+                    />
+                    <input
+                      type="text"
+                      placeholder="e.g. Morphine, Insulin, Aspirin…"
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      autoFocus
+                      className="w-full border border-slate-200 rounded-xl p-3 pl-9 text-sm outline-none focus:border-teal-400"
+                      style={{ color: "#1e293b", background: "#f8fafc" }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Quantity */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">
+                  Quantity to Add
+                </label>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                    className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-bold"
+                    style={{ background: "#f1f5f9", color: "#64748b" }}
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    value={quantity}
+                    onChange={(e) =>
+                      setQuantity(Math.max(1, Number(e.target.value)))
+                    }
+                    className="flex-1 text-center border border-slate-200 rounded-xl p-3 text-lg font-bold outline-none"
+                    style={{ color: "#1e293b", background: "#f8fafc" }}
+                  />
+                  <button
+                    onClick={() => setQuantity((q) => q + 1)}
+                    className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-bold"
+                    style={{ background: "#f1f5f9", color: "#64748b" }}
+                  >
+                    +
+                  </button>
+                </div>
+                {/* Quick buttons */}
+                <div className="flex gap-2 mt-2">
+                  {[10, 25, 50, 100].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setQuantity(n)}
+                      className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                      style={{
+                        background: quantity === n ? "#e6fffa" : "#f8fafc",
+                        color: quantity === n ? "#0f766e" : "#94a3b8",
+                        border:
+                          quantity === n
+                            ? "1.5px solid #14b8a6"
+                            : "1.5px solid #e2e8f0",
+                      }}
+                    >
+                      +{n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preview (existing medicine only) */}
+              {!isNew && medicine && currentQty !== null && (
+                <div
+                  className="rounded-xl p-3 flex items-center justify-between"
+                  style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}
+                >
+                  <span className="text-xs text-slate-600">
+                    {medicine}: <b>{currentQty}</b> →{" "}
+                    <b className="text-green-600">{currentQty + quantity}</b>{" "}
+                    units
+                  </span>
+                  <span className="text-xs text-green-600 font-medium">
+                    +{quantity}
+                  </span>
+                </div>
+              )}
+
+              {/* Feedback */}
+              {feedback && (
+                <div
+                  className="rounded-xl p-3 flex items-center gap-2 text-xs font-medium"
+                  style={{
+                    background: feedback.ok ? "#f0fdf4" : "#fef2f2",
+                    color: feedback.ok ? "#16a34a" : "#dc2626",
+                  }}
+                >
+                  {feedback.ok ? <FaCheckCircle /> : <FaExclamationTriangle />}
+                  {feedback.text}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => setModalOpen(false)}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold"
+                  style={{ background: "#f1f5f9", color: "#64748b" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRestock}
+                  disabled={submitting || !medicine}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-50"
+                  style={{
+                    background: "linear-gradient(135deg, #0d3d3d, #14b8a6)",
+                  }}
+                >
+                  {submitting ? (
+                    <span className="animate-pulse">Processing…</span>
+                  ) : isNew ? (
+                    <>
+                      <FaPlus size={12} /> Add Medicine
+                    </>
+                  ) : (
+                    <>
+                      <FaSync size={12} /> Confirm Restock
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
