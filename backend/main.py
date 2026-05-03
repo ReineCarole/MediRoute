@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Optional
-from collections import deque
+from collections import deque, defaultdict
+from datetime import date
 
 from graph import Graph, DOUALA_NODES, DOUALA_EDGES
 from priority_queue import PriorityQueue
@@ -12,7 +13,7 @@ from inventory import Inventory
 from auth.jwt_handler import create_token, decode_token
 from auth.password import hash_password, verify_password
 
-app = FastAPI()
+app = FastAPI(title ="MEDIROUTE API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -86,6 +87,7 @@ pq           = PriorityQueue()
 inv          = Inventory()
 delivery_stack: list  = []          # LIFO — last 10 dispatched deliveries
 fifo_queue:   deque   = deque()     # FIFO demo queue
+delivery_stats: dict    = defaultdict(int)  # medicine → total delivered quantity
 
 DEPOT = "Dépôt Central Akwa"
 inv.add_stock(DEPOT, "Oxygen",      20)
@@ -393,6 +395,7 @@ def process_request(current_user: dict = Depends(require_permission("dispatch"))
         "cost":     route["cost"],
         "by":       current_user["username"],
     })
+    delivery_stats[str(date.today())] += 1
 
     return {
         "request": str(req), "status": "APPROVED",
@@ -406,6 +409,22 @@ def cancel_request(index: int, _: dict = Depends(require_permission("dispatch"))
     if not pq.cancel(index):
         raise HTTPException(status_code=404, detail=f"No request at index {index}")
     return {"message": f"Request {index} cancelled", "queue_size": pq.size()}
+
+@app.get("/stats")
+def get_stats(_: dict = Depends(require_permission("read"))):
+    """Returns daily dispatch counts for the chart."""
+    from datetime import date, timedelta
+    # Build last 30 days with 0 defaults for missing days
+    today  = date.today()
+    result = []
+    for i in range(29, -1, -1):
+        day   = today - timedelta(days=i)
+        label = day.strftime("%b %d")
+        result.append({
+            "day":        label,
+            "deliveries": delivery_stats.get(str(day), 0),
+        })
+    return {"stats": result}
 
 # ─── Road controls ────────────────────────────────────────────────────────────
 @app.post("/road/block")

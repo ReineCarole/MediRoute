@@ -24,15 +24,6 @@ import {
 } from "recharts";
 import { apiFetch } from "../auth/Api";
 
-const DELIVERY_HISTORY = [
-  { month: "Nov", deliveries: 18 },
-  { month: "Dec", deliveries: 24 },
-  { month: "Jan", deliveries: 31 },
-  { month: "Feb", deliveries: 27 },
-  { month: "Mar", deliveries: 38 },
-  { month: "Apr", deliveries: 43 },
-];
-
 const MEDICINE_COLORS = [
   "#14b8a6",
   "#f59e0b",
@@ -46,6 +37,9 @@ export default function DashboardTab() {
   const [inventory, setInventory] = useState<Record<string, number>>({});
   const [nodeCount, setNodeCount] = useState(0);
   const [blockedCount, setBlockedCount] = useState(0);
+  const [deliveryHistory, setDeliveryHistory] = useState<
+    { day: string; deliveries: number }[]
+  >([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -53,13 +47,15 @@ export default function DashboardTab() {
       apiFetch("/inventory").then((r) => r.json()),
       apiFetch("/nodes").then((r) => r.json()),
       apiFetch("/roads/blocked").then((r) => r.json()),
+      apiFetch("/stats").then((r) => r.json()),
     ])
-      .then(([inv, nodes, blocked]) => {
+      .then(([inv, nodes, blocked, stats]) => {
         setInventory(inv?.inventory?.["Dépôt Central Akwa"] ?? {});
         setNodeCount(
           (nodes?.nodes ?? []).filter((n: any) => n.type !== "depot").length,
         );
         setBlockedCount((blocked?.blocked ?? []).length);
+        setDeliveryHistory(stats?.stats ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -199,7 +195,7 @@ export default function DashboardTab() {
             </span>
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={DELIVERY_HISTORY}>
+            <AreaChart data={deliveryHistory}>
               <defs>
                 <linearGradient id="tealGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.3} />
@@ -208,13 +204,14 @@ export default function DashboardTab() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
               <XAxis
-                dataKey="month"
-                tick={{ fontSize: 11, fill: "#94a3b8" }}
+                dataKey="day"
+                tick={{ fontSize: 10, fill: "#94a3b8" }}
                 axisLine={false}
                 tickLine={false}
+                interval={4}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "#94a3b8" }}
+                tick={{ fontSize: 10, fill: "#94a3b8" }}
                 axisLine={false}
                 tickLine={false}
               />
