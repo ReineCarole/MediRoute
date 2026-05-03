@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Optional
+from collections import deque
 
 from graph import Graph, DOUALA_NODES, DOUALA_EDGES
 from priority_queue import PriorityQueue
@@ -81,8 +82,10 @@ for from_node, to_node, weight in DOUALA_EDGES:
     g.add_edge(from_node, to_node, weight)
 
 # ─── Data structures ──────────────────────────────────────────────────────────
-pq  = PriorityQueue()
-inv = Inventory()
+pq           = PriorityQueue()
+inv          = Inventory()
+delivery_stack: list  = []          # LIFO — last 10 dispatched deliveries
+fifo_queue:   deque   = deque()     # FIFO demo queue
 
 DEPOT = "Dépôt Central Akwa"
 inv.add_stock(DEPOT, "Oxygen",      20)
@@ -91,6 +94,107 @@ inv.add_stock(DEPOT, "Bandages",    50)
 inv.add_stock(DEPOT, "Syringes",    40)
 inv.add_stock(DEPOT, "Gloves",      60)
 inv.add_stock(DEPOT, "Antibiotics", 25)
+
+# ─── BST (simple in-memory BST for facility lookup) ───────────────────────────
+class BSTNode:
+    def __init__(self, key: str, value: dict):
+        self.key   = key
+        self.value = value
+        self.left  = None
+        self.right = None
+
+class BST:
+    def __init__(self):
+        self.root = None
+
+    def insert(self, key: str, value: dict):
+        self.root = self._insert(self.root, key, value)
+
+    def _insert(self, node, key, value):
+        if node is None:
+            return BSTNode(key, value)
+        if key < node.key:
+            node.left  = self._insert(node.left,  key, value)
+        elif key > node.key:
+            node.right = self._insert(node.right, key, value)
+        return node
+
+    def search(self, key: str) -> list:
+        """Return search path + result."""
+        path   = []
+        result = self._search(self.root, key, path)
+        return {"path": path, "found": result is not None, "node": result}
+
+    def _search(self, node, key, path):
+        if node is None:
+            return None
+        path.append(node.key)
+        if key == node.key:
+            return node.value
+        elif key < node.key:
+            return self._search(node.left,  key, path)
+        else:
+            return self._search(node.right, key, path)
+
+    def to_list(self) -> list:
+        """In-order traversal."""
+        result = []
+        self._inorder(self.root, result)
+        return result
+
+    def _inorder(self, node, result):
+        if node:
+            self._inorder(node.left, result)
+            result.append({"key": node.key, "value": node.value})
+            self._inorder(node.right, result)
+
+# Build BST from facilities
+facility_bst = BST()
+for name, data in DOUALA_NODES.items():
+    facility_bst.insert(name, {
+        "type":           data["type"],
+        "arrondissement": data["arrondissement"],
+        "coords":         data["coords"],
+    })
+
+# ─── Hash Table (Python dict with hash visualization) ────────────────────────
+class HashTable:
+    def __init__(self, size: int = 16):
+        self.size    = size
+        self.buckets = [[] for _ in range(size)]
+
+    def _hash(self, key: str) -> int:
+        return sum(ord(c) for c in key) % self.size
+
+    def set(self, key: str, value):
+        idx = self._hash(key)
+        for pair in self.buckets[idx]:
+            if pair[0] == key:
+                pair[1] = value
+                return
+        self.buckets[idx].append([key, value])
+
+    def get(self, key: str):
+        idx = self._hash(key)
+        for pair in self.buckets[idx]:
+            if pair[0] == key:
+                return pair[1]
+        return None
+
+    def snapshot(self):
+        return [
+            {
+                "bucket": i,
+                "entries": [{"key": p[0], "value": p[1]} for p in bucket],
+            }
+            for i, bucket in enumerate(self.buckets)
+            if bucket  # only non-empty buckets
+        ]
+
+# Build hash table from inventory
+inv_hash = HashTable()
+for med, qty in (inv.data.get(DEPOT) or {}).items():
+    inv_hash.set(med, qty)
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 class RegisterBody(BaseModel):
@@ -105,7 +209,7 @@ class RegisterBody(BaseModel):
 class RestockBody(BaseModel):
     medicine: str
     quantity: int
-    is_new:   bool = False   # True = add a brand new medicine type
+    is_new:   bool = False
 
 # ─── Auth endpoints ───────────────────────────────────────────────────────────
 @app.post("/login")
@@ -149,7 +253,7 @@ def home():
 # ─── Read endpoints ───────────────────────────────────────────────────────────
 @app.get("/nodes")
 def get_nodes(_: dict = Depends(require_permission("read"))):
-    return {"nodes": [{"name": name, "coords": data["coords"], "type": data["type"], "arrondissement": data["arrondissement"]} for name, data in DOUALA_NODES.items()]}
+    return {"nodes": [{"name": n, "coords": d["coords"], "type": d["type"], "arrondissement": d["arrondissement"]} for n, d in DOUALA_NODES.items()]}
 
 @app.get("/inventory")
 def get_inventory(_: dict = Depends(require_permission("read"))):
@@ -178,6 +282,68 @@ def get_dynamic_route(destination: str, _: dict = Depends(require_permission("re
         return {"error": "No route found — all paths may be blocked"}
     return route
 
+# ─── Data structures snapshot ─────────────────────────────────────────────────
+@app.get("/ds/snapshot")
+def ds_snapshot(_: dict = Depends(require_permission("read"))):
+    """Returns a full snapshot of all 6 data structures for the DS panel."""
+
+    # 1. Graph — nodes + edges + blocked
+    graph_nodes = [
+        {"name": name, "type": DOUALA_NODES[name]["type"], "neighbors": len(edges)}
+        for name, edges in g.nodes.items()
+    ]
+    graph_edges = [
+        {"from": f, "to": t, "weight": w, "blocked": (f, t) in g.blocked_edges}
+        for f, neighbors in g.nodes.items()
+        for t, w in neighbors
+        if f < t  # avoid duplicates
+    ]
+
+    # 2. Priority Queue — current pending requests
+    pq_items = pq.list_requests()
+
+    # 3. Stack — last 10 dispatches (LIFO)
+    stack_items = list(reversed(delivery_stack[-10:]))
+
+    # 4. BST — in-order facility list
+    bst_items = facility_bst.to_list()
+
+    # 5. Hash Table — inventory buckets
+    # Sync hash table with current inventory
+    current_inv = inv.data.get(DEPOT, {})
+    ht = HashTable()
+    for med, qty in current_inv.items():
+        ht.set(med, qty)
+    ht_buckets = ht.snapshot()
+
+    # 6. FIFO Queue — last 10 processed requests
+    fifo_items = list(fifo_queue)[-10:]
+
+    return {
+        "graph":          {"nodes": graph_nodes, "edges": graph_edges, "node_count": len(graph_nodes), "edge_count": len(graph_edges)},
+        "priority_queue": {"items": pq_items,    "size": pq.size()},
+        "stack":          {"items": stack_items, "size": len(delivery_stack)},
+        "bst":            {"items": bst_items,   "size": len(bst_items)},
+        "hash_table":     {"buckets": ht_buckets, "size": len(current_inv), "capacity": 16},
+        "fifo_queue":     {"items": fifo_items,  "size": len(fifo_queue)},
+    }
+
+@app.get("/ds/bst/search")
+def bst_search(query: str, _: dict = Depends(require_permission("read"))):
+    """Search the facility BST and return the traversal path."""
+    result = facility_bst.search(query)
+    return result
+
+@app.get("/ds/dijkstra")
+def dijkstra_steps(source: str, destination: str, _: dict = Depends(require_permission("read"))):
+    """Run Dijkstra and return the result with path."""
+    if source not in g.nodes or destination not in g.nodes:
+        raise HTTPException(status_code=400, detail="Unknown node(s)")
+    result = g.dijkstra(source, destination)
+    if not result:
+        return {"error": "No path found"}
+    return result
+
 # ─── Dispatch endpoints ───────────────────────────────────────────────────────
 @app.post("/request")
 def add_request(
@@ -197,6 +363,10 @@ def add_request(
         raise HTTPException(status_code=400, detail=f"Not enough stock: {available} available")
     req = Request(facility, medicine, priority, quantity)
     pq.add_request(req)
+    # Also push to FIFO queue
+    fifo_queue.append({"facility": facility, "medicine": medicine, "priority": priority, "quantity": quantity})
+    if len(fifo_queue) > 20:
+        fifo_queue.popleft()
     return {"message": "Request added", "data": str(req), "queue_size": pq.size()}
 
 @app.get("/process")
@@ -212,6 +382,18 @@ def process_request(current_user: dict = Depends(require_permission("dispatch"))
     if not route:
         inv.add_stock(DEPOT, req.medicine, req.quantity)
         return {"request": str(req), "status": "FAILED", "reason": "No route found"}
+
+    # Push to delivery stack (LIFO)
+    delivery_stack.append({
+        "facility": req.facility,
+        "medicine": req.medicine,
+        "quantity": req.quantity,
+        "priority": req.priority,
+        "path":     route["path"],
+        "cost":     route["cost"],
+        "by":       current_user["username"],
+    })
+
     return {
         "request": str(req), "status": "APPROVED",
         "quantity": req.quantity,
@@ -247,27 +429,17 @@ def delay_road(from_node: str, to_node: str, extra_time: int, _: dict = Depends(
 
 # ─── Inventory management ─────────────────────────────────────────────────────
 @app.post("/inventory/restock")
-def restock(
-    body: RestockBody,
-    current_user: dict = Depends(require_permission("manage_inventory"))
-):
+def restock(body: RestockBody, current_user: dict = Depends(require_permission("manage_inventory"))):
     if body.quantity < 1:
         raise HTTPException(status_code=400, detail="Quantity must be at least 1")
-
     medicine_name = body.medicine.strip()
     if not medicine_name:
         raise HTTPException(status_code=400, detail="Medicine name cannot be empty")
-
     depot_stock = inv.data.get(DEPOT, {})
-
-    # If new medicine, it must not already exist
     if body.is_new and medicine_name in depot_stock:
         raise HTTPException(status_code=400, detail=f"'{medicine_name}' already exists — use restock instead")
-
-    # If restocking existing, it must exist
     if not body.is_new and medicine_name not in depot_stock:
         raise HTTPException(status_code=400, detail=f"'{medicine_name}' not found — use 'Add New' instead")
-
     inv.add_stock(DEPOT, medicine_name, body.quantity)
     return {
         "message":      f"{'Added' if body.is_new else 'Restocked'} {body.quantity}× {medicine_name}",
@@ -289,16 +461,11 @@ def list_users(_: dict = Depends(require_permission("manage_users"))):
     }
 
 @app.patch("/users/{username}/role")
-def update_user_role(
-    username: str,
-    role: str,
-    current_user: dict = Depends(require_permission("manage_users"))
-):
+def update_user_role(username: str, role: str, current_user: dict = Depends(require_permission("manage_users"))):
     if username not in USERS:
         raise HTTPException(status_code=404, detail="User not found")
-    valid_roles = {"superadmin", "admin", "dispatcher", "viewer"}
-    if role not in valid_roles:
-        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+    if role not in {"superadmin", "admin", "dispatcher", "viewer"}:
+        raise HTTPException(status_code=400, detail="Invalid role")
     if username == current_user["username"]:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
     USERS[username]["role"] = role

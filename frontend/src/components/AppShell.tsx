@@ -11,6 +11,8 @@ import {
   FaAmbulance,
   FaBars,
   FaTimes,
+  FaUsers,
+  FaDatabase,
 } from "react-icons/fa";
 import { useAuth } from "./auth/Authcontext";
 
@@ -19,8 +21,17 @@ import MapTab from "./tabs/MapTab";
 import InventoryTab from "./tabs/InventoryTab";
 import OrdersTab from "./tabs/OrdersTab";
 import SettingsTab from "./tabs/SettingsTab";
+import UsersTab from "./tabs/Userstab";
+import DataStructuresTab from "./tabs/DataStructuresTab";
 
-type Tab = "dashboard" | "map" | "inventory" | "orders" | "settings";
+type Tab =
+  | "dashboard"
+  | "map"
+  | "inventory"
+  | "orders"
+  | "settings"
+  | "users"
+  | "ds";
 
 const NAV = [
   {
@@ -38,6 +49,8 @@ const NAV = [
     permission: "dispatch",
   },
   { id: "settings", label: "Settings", icon: FaCog, permission: "block_roads" },
+  { id: "users", label: "Users", icon: FaUsers, permission: "manage_users" },
+  { id: "ds", label: "Data Structures", icon: FaDatabase, permission: "read" },
 ] as const;
 
 export interface DispatchEntry {
@@ -307,6 +320,18 @@ export default function AppShell() {
                 </div>
               </div>
             )}
+          </div>
+          <div style={tabStyle("users")}>
+            {hasPermission("manage_users") ? (
+              <UsersTab />
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <p className="text-slate-400 text-sm">Superadmin access only</p>
+              </div>
+            )}
+          </div>
+          <div style={tabStyle("ds")}>
+            <DataStructuresTab />
           </div>
         </div>
       </main>
