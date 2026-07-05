@@ -43,6 +43,7 @@ export default function DashboardTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Initial load — fetch everything
     Promise.all([
       apiFetch("/inventory").then((r) => r.json()),
       apiFetch("/nodes").then((r) => r.json()),
@@ -50,7 +51,7 @@ export default function DashboardTab() {
       apiFetch("/stats").then((r) => r.json()),
     ])
       .then(([inv, nodes, blocked, stats]) => {
-        setInventory(inv?.inventory?.["Dépôt Central Akwa"] ?? {});
+        setInventory(inv?.inventory?.["FRPSL Bonanjo"] ?? {});
         setNodeCount(
           (nodes?.nodes ?? []).filter((n: any) => n.type !== "depot").length,
         );
@@ -59,6 +60,22 @@ export default function DashboardTab() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+
+    // Poll stats + inventory every 10s so chart updates after dispatches
+    const id = setInterval(async () => {
+      try {
+        const [invRes, statsRes, blockedRes] = await Promise.all([
+          apiFetch("/inventory").then((r) => r.json()),
+          apiFetch("/stats").then((r) => r.json()),
+          apiFetch("/roads/blocked").then((r) => r.json()),
+        ]);
+        setInventory(invRes?.inventory?.["FRPSL Bonanjo"] ?? {});
+        setDeliveryHistory(statsRes?.stats ?? []);
+        setBlockedCount((blockedRes?.blocked ?? []).length);
+      } catch {}
+    }, 10000);
+
+    return () => clearInterval(id);
   }, []);
 
   const totalStock = Object.values(inventory).reduce((a, b) => a + b, 0);
@@ -90,11 +107,13 @@ export default function DashboardTab() {
     },
     {
       label: "Deliveries This Month",
-      value: 43,
+      value: loading
+        ? "—"
+        : deliveryHistory.reduce((sum, d) => sum + d.deliveries, 0),
       icon: FaRoute,
       color: "#3b82f6",
       bg: "#eff6ff",
-      trend: "+13% vs last month",
+      trend: `${deliveryHistory.reduce((s, d) => s + d.deliveries, 0)} total`,
       up: true,
     },
     {

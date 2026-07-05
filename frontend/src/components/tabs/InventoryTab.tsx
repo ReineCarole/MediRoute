@@ -44,25 +44,52 @@ export default function InventoryTab() {
   } | null>(null);
 
   async function fetchInventory(silent = false) {
-    if (!silent) setLoading(true); // ← only show spinner on manual refresh
+    if (!silent) setLoading(true);
+
     try {
       const res = await apiFetch("/inventory");
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch inventory");
+      }
+
       const data = await res.json();
-      const depot = data?.inventory?.["Dépôt Central Akwa"] ?? {};
-      setInventory(depot);
-      const meds = Object.keys(depot);
-      if (meds.length > 0 && !selMedicine) setSelMedicine(meds[0]);
-    } catch {}
-    if (!silent) setLoading(false);
+
+      // Get the first (and only) depot returned by the backend
+      const depot = Object.values(data.inventory ?? {})[0] as Record<
+        string,
+        number
+      >;
+
+      setInventory(depot ?? {});
+
+      const meds = Object.keys(depot ?? {});
+      if (meds.length > 0 && !selMedicine) {
+        setSelMedicine(meds[0]);
+      }
+    } catch (err) {
+      console.error("Inventory fetch error:", err);
+      setInventory({});
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }
 
   useEffect(() => {
-    fetchInventory();
+    async function loadInventory() {
+      await fetchInventory();
+    }
+
+    loadInventory();
+
     const id = setInterval(() => {
-      if (!modalOpen) fetchInventory(true);
+      if (!modalOpen) {
+        fetchInventory(true);
+      }
     }, 8000);
+
     return () => clearInterval(id);
-  }, [modalOpen]); // ← re-register when modalOpen changes
+  }, [modalOpen]);
 
   function openModal(preselect?: string) {
     setSelMedicine(preselect ?? Object.keys(inventory)[0] ?? "");
@@ -130,9 +157,7 @@ export default function InventoryTab() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="font-bold text-slate-800 text-base">
-            Dépôt Central Akwa
-          </h2>
+          <h2 className="font-bold text-slate-800 text-base">FRPSL Bonanjo</h2>
           <p className="text-xs text-slate-400 mt-0.5">
             Medical supply inventory
           </p>

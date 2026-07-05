@@ -5,11 +5,11 @@ import heapq
 
 DOUALA_NODES = {
     # ── DEPOT ────────────────────────────────────────────────────────────────
-    "Dépôt Central Akwa": {
-        "coords": [4.0511, 9.7085],
-        "type": "depot",
-        "arrondissement": "Douala I",
-    },
+   "FRPSL Bonanjo": {
+    "coords": [4.0369184, 9.6830041],
+    "type": "depot",
+    "arrondissement": "Douala I",
+},
 
     # ── HOSPITALS ─────────────────────────────────────────────────────────────
     "Hôpital Laquintinie": {
@@ -178,13 +178,13 @@ DOUALA_NODES = {
 # ─── Road edges (approximate travel time in minutes) ─────────────────────────
 DOUALA_EDGES = [
     # Depot connections
-    ("Dépôt Central Akwa",          "Hôpital Laquintinie",                    4),
-    ("Dépôt Central Akwa",          "Clinique du Gros Chêne",                 3),
-    ("Dépôt Central Akwa",          "Pharmacie de la Jouvence",               3),
-    ("Dépôt Central Akwa",          "Pharmacie des Hôpitaux",                 4),
-    ("Dépôt Central Akwa",          "Pharmacie du Centre Akwa",               4),
-    ("Dépôt Central Akwa",          "Laboratoire Drouot",                     5),
-    ("Dépôt Central Akwa",          "Douala Labo",                            5),
+    ("FRPSL Bonanjo",          "Hôpital Laquintinie",                    4),
+    ("FRPSL Bonanjo",          "Clinique du Gros Chêne",                 3),
+    ("FRPSL Bonanjo",          "Pharmacie de la Jouvence",               3),
+    ("FRPSL Bonanjo",          "Pharmacie des Hôpitaux",                 4),
+    ("FRPSL Bonanjo",          "Pharmacie du Centre Akwa",               4),
+    ("FRPSL Bonanjo",          "Laboratoire Drouot",                     5),
+    ("FRPSL Bonanjo",          "Douala Labo",                            5),
 
     # Akwa cluster
     ("Hôpital Laquintinie",         "Pharmacie des Hôpitaux",                 2),

@@ -73,10 +73,18 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
     apiFetch("/inventory")
       .then((r) => r.json())
       .then((data) => {
-        const depot = data?.inventory?.["Dépôt Central Akwa"] ?? {};
+        const depot =
+          data?.inventory?.["FRPSL Bonanjo"] ??
+          Object.values(data?.inventory ?? {})[0] ??
+          {};
+
         setInventory(depot);
+
         const meds = Object.keys(depot);
-        if (meds.length > 0) setMedicine(meds[0]);
+
+        if (meds.length > 0) {
+          setMedicine((prev) => prev || meds[0]);
+        }
       })
       .catch(() => {});
 
@@ -96,12 +104,20 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
       apiFetch("/inventory")
         .then((r) => r.json())
         .then((data) => {
-          const depot = data?.inventory?.["Dépôt Central Akwa"] ?? {};
+          const depot =
+            data?.inventory?.["FRPSL Bonanjo"] ??
+            Object.values(data?.inventory ?? {})[0] ??
+            {};
+
           setInventory(depot);
+
           setMedicine((prev) => {
-            // Keep current selection if it still exists, else pick first
             const meds = Object.keys(depot);
-            if (prev && depot[prev] !== undefined) return prev;
+
+            if (prev && prev in depot) {
+              return prev;
+            }
+
             return meds[0] ?? "";
           });
         })
@@ -131,7 +147,13 @@ export default function OrdersTab({ history, onQueue, onDispatch }: Props) {
 
   async function refreshInventory() {
     const data = await apiFetch("/inventory").then((r) => r.json());
-    setInventory(data?.inventory?.["Dépôt Central Akwa"] ?? {});
+
+    const depot =
+      data?.inventory?.["FRPSL Bonanjo"] ??
+      Object.values(data?.inventory ?? {})[0] ??
+      {};
+
+    setInventory(depot);
   }
 
   async function createRequest() {

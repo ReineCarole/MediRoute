@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import {
   FaMapMarkedAlt,
   FaTachometerAlt,
@@ -23,6 +23,8 @@ import OrdersTab from "./tabs/OrdersTab";
 import SettingsTab from "./tabs/SettingsTab";
 import UsersTab from "./tabs/Userstab";
 import DataStructuresTab from "./tabs/DataStructuresTab";
+
+import { apiFetch } from "./auth/Api";
 
 type Tab =
   | "dashboard"
@@ -77,6 +79,34 @@ export default function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [history, setHistory] = useState<DispatchEntry[]>([]);
   const [pendingRoute, setPendingRoute] = useState<number[][] | null>(null);
+  const historySeeded = useRef(false);
+
+  // Seed dispatch history from DB on login
+  useEffect(() => {
+    if (!user || historySeeded.current) return;
+    historySeeded.current = true;
+    apiFetch("/ds/snapshot")
+      .then((r) => r.json())
+      .then((data) => {
+        const deliveries = data?.stack?.items ?? [];
+        const seeded: DispatchEntry[] = deliveries.map((d: any) => ({
+          status: "APPROVED",
+          request: `${d.facility} — ${d.quantity}× ${d.medicine} (priority ${d.priority})`,
+          route: { path: d.path ?? [], coords: [] },
+          remaining_stock: undefined,
+          time: d.created_at
+            ? new Date(d.created_at).toLocaleTimeString()
+            : "—",
+        }));
+        setHistory(seeded);
+      })
+      .catch(() => {});
+  }, [user]);
+
+  function handleLogout() {
+    historySeeded.current = false;
+    logout();
+  }
 
   // Filter nav items by role
   const visibleNav = NAV.filter((item) => hasPermission(item.permission));
@@ -211,7 +241,7 @@ export default function AppShell() {
             )}
           </button>
           <button
-            onClick={logout}
+            onClick={handleLogout}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-red-900/20 transition-colors group"
           >
             <FaSignOutAlt
